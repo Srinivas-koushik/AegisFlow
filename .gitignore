@@ -1,0 +1,48 @@
+# Node
+node_modules/
+.next/
+
+# Python
+__pycache__/
+venv/
+.env
+
+# Rust
+target/
+
+# Go
+bin/
+
+# Logs
+*.log
+
+# IDE
+.vscode/
+.idea/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker-data/
+
+# Coverage
+coverage/
+
+# Build
+dist/
+build/
+
+# Terraform
+*.tfstate
+*.tfstate.backup
+
+# Kubernetes
+kubeconfig.yaml
+
+# Secrets
+*.pem
+*.key
+*.crt
+secrets/
