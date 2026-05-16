@@ -1,0 +1,550 @@
+syntax = "proto3";
+
+package aegisflow.v1;
+
+// Go: generated into packages/shared-types/go/
+// Python: generated into packages/shared-types/python/
+// TypeScript: generated into packages/shared-types/typescript/
+option go_package = "github.com/aegisflow/packages/proto/gen/go;aegisflowv1";
+option java_package = "com.aegisflow.v1";  // future-proofing
+
+import "google/protobuf/timestamp.proto";
+import "google/protobuf/duration.proto";
+import "google/protobuf/struct.proto";
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// ENUMERATIONS
+// All enums start at 0 with an UNSPECIFIED value.
+// This is mandatory in proto3 — the zero value is the default and must be safe.
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// The type of agent interacting with AegisFlow.
+// Drives different default policy sets in the runtime gateway.
+enum AgentType {
+  AGENT_TYPE_UNSPECIFIED  = 0;
+  AGENT_TYPE_LLM          = 1;  // single LLM (Claude, GPT-4, Gemini)
+  AGENT_TYPE_ORCHESTRATOR = 2;  // coordinates multiple sub-agents
+  AGENT_TYPE_TOOL_CALLER  = 3;  // specialized tool execution agent
+  AGENT_TYPE_EVALUATOR    = 4;  // judges or scores other agent outputs
+  AGENT_TYPE_HUMAN_PROXY  = 5;  // represents a human-in-the-loop step
+}
+
+// The runtime status of an agent within the system.
+enum AgentStatus {
+  AGENT_STATUS_UNSPECIFIED = 0;
+  AGENT_STATUS_ACTIVE      = 1;  // operating normally
+  AGENT_STATUS_SUSPENDED   = 2;  // halted, pending review
+  AGENT_STATUS_REVOKED     = 3;  // permanently decommissioned
+  AGENT_STATUS_PENDING     = 4;  // registered, not yet activated
+  AGENT_STATUS_DEGRADED    = 5;  // operating with reduced permissions after warning
+}
+
+// The outcome of a policy evaluation against an agent action.
+enum Decision {
+  DECISION_UNSPECIFIED = 0;
+  DECISION_ALLOW       = 1;  // action permitted
+  DECISION_DENY        = 2;  // action blocked
+  DECISION_ESCALATE    = 3;  // blocked, human review required before retry
+  DECISION_WARN        = 4;  // allowed this time, but flagged for monitoring
+  DECISION_SANDBOX     = 5;  // allowed but forced into stricter sandbox
+}
+
+// All events that the audit log can record.
+// Never delete or renumber values — only add new ones.
+enum EventType {
+  EVENT_UNSPECIFIED                = 0;
+
+  // Auth lifecycle
+  EVENT_AGENT_REGISTERED           = 1;
+  EVENT_AGENT_AUTHENTICATED        = 2;
+  EVENT_AGENT_TOKEN_REFRESHED      = 3;
+  EVENT_AGENT_TOKEN_REVOKED        = 4;
+  EVENT_AGENT_SUSPENDED            = 5;
+  EVENT_AGENT_REINSTATED           = 6;
+
+  // Tool and resource interactions
+  EVENT_TOOL_CALL_REQUESTED        = 10;
+  EVENT_TOOL_CALL_ALLOWED          = 11;
+  EVENT_TOOL_CALL_BLOCKED          = 12;
+  EVENT_TOOL_CALL_COMPLETED        = 13;
+  EVENT_TOOL_CALL_FAILED           = 14;
+
+  // Sandbox
+  EVENT_SANDBOX_STARTED            = 20;
+  EVENT_SANDBOX_COMPLETED          = 21;
+  EVENT_SANDBOX_TERMINATED         = 22;  // killed due to timeout or violation
+  EVENT_SANDBOX_ESCAPE_ATTEMPT     = 23;  // critical
+
+  // Policy
+  EVENT_POLICY_EVALUATED           = 30;
+  EVENT_POLICY_UPDATED             = 31;
+  EVENT_POLICY_VIOLATION           = 32;
+
+  // Threats
+  EVENT_THREAT_DETECTED            = 40;
+  EVENT_PROMPT_INJECTION_DETECTED  = 41;
+  EVENT_CONTEXT_POISONING_DETECTED = 42;
+  EVENT_PRIVILEGE_ESCALATION       = 43;
+  EVENT_ANOMALY_DETECTED           = 44;
+
+  // MCP specific
+  EVENT_MCP_CALL_INTERCEPTED       = 50;
+  EVENT_MCP_SCHEMA_VIOLATION       = 51;
+  EVENT_MCP_TOOL_HIJACK_ATTEMPT    = 52;
+}
+
+// Severity levels for threat signals.
+enum ThreatSeverity {
+  SEVERITY_UNSPECIFIED = 0;
+  SEVERITY_INFO        = 1;  // informational, no action needed
+  SEVERITY_LOW         = 2;  // minor anomaly, monitor
+  SEVERITY_MEDIUM      = 3;  // suspicious, increase scrutiny
+  SEVERITY_HIGH        = 4;  // likely attack, alert operator
+  SEVERITY_CRITICAL    = 5;  // active breach attempt, auto-suspend
+}
+
+// Classification of detected threats.
+enum ThreatType {
+  THREAT_UNSPECIFIED             = 0;
+  THREAT_PROMPT_INJECTION        = 1;  // adversarial instructions in input
+  THREAT_TOOL_HIJACK             = 2;  // tool call redirected to unintended target
+  THREAT_CONTEXT_POISONING       = 3;  // malicious content injected into context window
+  THREAT_ANOMALOUS_BEHAVIOR      = 4;  // statistical deviation from baseline
+  THREAT_PRIVILEGE_ESCALATION    = 5;  // attempting to exceed granted scopes
+  THREAT_SANDBOX_ESCAPE          = 6;  // attempting to break container isolation
+  THREAT_DATA_EXFILTRATION       = 7;  // attempting to leak sensitive data
+  THREAT_CREDENTIAL_THEFT        = 8;  // attempting to access credentials
+  THREAT_DENIAL_OF_SERVICE       = 9;  // flooding resources
+  THREAT_SUPPLY_CHAIN            = 10; // compromised tool or dependency
+}
+
+// The credential backend used to store secrets for this agent.
+enum CredentialBackend {
+  CREDENTIAL_BACKEND_UNSPECIFIED = 0;
+  CREDENTIAL_BACKEND_MEMORY      = 1;  // local dev only
+  CREDENTIAL_BACKEND_VAULT       = 2;  // HashiCorp Vault
+  CREDENTIAL_BACKEND_AWS_SM      = 3;  // AWS Secrets Manager
+  CREDENTIAL_BACKEND_GCP_SM      = 4;  // GCP Secret Manager
+  CREDENTIAL_BACKEND_AZURE_KV    = 5;  // Azure Key Vault
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// CORE IDENTITY MESSAGES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// The complete identity of an agent within AegisFlow.
+// Embedded in every JWT issued by the auth service.
+// Immutable after issuance — changes require a new token.
+message AgentIdentity {
+  string      agent_id    = 1;  // stable UUID v4, never reassigned
+  string      agent_name  = 2;  // human-readable label e.g. "finance-copilot-v2"
+  AgentType   agent_type  = 3;
+  AgentStatus status      = 4;
+  string      tenant_id   = 5;  // org-level isolation boundary
+  string      team_id     = 6;  // team within org (optional)
+
+  // What this agent is allowed to do.
+  // Scopes follow the format "resource:action" e.g. "fs:read", "db:query", "api:post"
+  repeated string scopes = 7;
+
+  // Arbitrary metadata the operator attached at registration time.
+  // e.g. {"environment": "production", "version": "2.1.0", "owner": "alice@corp.com"}
+  map<string, string> labels = 8;
+
+  // The network address the agent is expected to originate from.
+  // Optional. If set, requests from other IPs are rejected.
+  repeated string allowed_ip_cidrs = 9;
+
+  google.protobuf.Timestamp issued_at    = 10;
+  google.protobuf.Timestamp expires_at   = 11;
+  google.protobuf.Timestamp last_seen_at = 12;
+}
+
+// Credential reference for an agent.
+// We never store the actual secret in proto — only a reference to where it lives.
+message AgentCredential {
+  string            credential_id   = 1;
+  string            agent_id        = 2;
+  CredentialBackend backend         = 3;
+  string            secret_path     = 4;  // path in vault / secret name in AWS SM
+  string            description     = 5;  // what this credential is for
+  repeated string   scopes          = 6;  // which scopes this credential unlocks
+
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp rotated_at = 8;
+  google.protobuf.Timestamp expires_at = 9;
+}
+
+// An RBAC role definition.
+message Role {
+  string          role_id     = 1;
+  string          role_name   = 2;  // e.g. "readonly", "operator", "admin"
+  string          description = 3;
+  string          tenant_id   = 4;
+
+  // The set of scopes this role grants.
+  repeated string scopes      = 5;
+
+  // Whether this role can be assigned to agents by non-admins.
+  bool            is_system   = 6;
+
+  google.protobuf.Timestamp created_at = 7;
+  google.protobuf.Timestamp updated_at = 8;
+}
+
+// A single scope definition with its human description.
+// Acts as the registry of all valid scopes in the system.
+message ScopeDefinition {
+  string scope       = 1;  // e.g. "fs:read"
+  string resource    = 2;  // e.g. "fs"
+  string action      = 3;  // e.g. "read"
+  string description = 4;
+  bool   is_sensitive = 5; // if true, extra audit logging on every use
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// TOKEN MESSAGES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// A token revocation record.
+// Stored in the revocation list so we can deny revoked tokens even before expiry.
+message TokenRevocation {
+  string agent_id   = 1;
+  string token_id   = 2;  // jti claim from the JWT
+  string reason     = 3;
+  string revoked_by = 4;  // agent_id or "system" or "operator:<name>"
+
+  google.protobuf.Timestamp revoked_at  = 5;
+  google.protobuf.Timestamp was_valid_until = 6;  // original expiry
+}
+
+// Summary of an active token — used for listing/audit purposes.
+// Never contains the raw token value.
+message TokenSummary {
+  string      token_id  = 1;  // jti claim
+  string      agent_id  = 2;
+  AgentStatus status    = 3;
+
+  google.protobuf.Timestamp issued_at  = 4;
+  google.protobuf.Timestamp expires_at = 5;
+  google.protobuf.Timestamp last_used  = 6;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// AUDIT AND OBSERVABILITY MESSAGES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// An immutable audit record of every significant event in the system.
+// Once written, never updated — only appended.
+message AuditEvent {
+  string    event_id   = 1;  // UUID v4, globally unique
+  string    agent_id   = 2;
+  string    tenant_id  = 3;
+  EventType event_type = 4;
+
+  // What resource was involved e.g. "tool:filesystem/write", "api:github/push"
+  string resource = 5;
+
+  // What action was attempted e.g. "write", "push", "query"
+  string action   = 6;
+
+  // Final outcome of the event
+  string outcome  = 7;  // "allowed", "denied", "error", "escalated"
+
+  // OpenTelemetry trace ID for correlating across services
+  string trace_id = 8;
+  string span_id  = 9;
+
+  // The policy decision that governed this event, if applicable
+  PolicyDecision policy_decision = 10;
+
+  // Structured context — tool arguments, prompt snippet, resource path etc.
+  // Using google.protobuf.Struct for flexible key-value without a fixed schema.
+  google.protobuf.Struct context = 11;
+
+  // The source IP of the agent request
+  string source_ip = 12;
+
+  // Any error message if outcome is "error"
+  string error_message = 13;
+
+  google.protobuf.Timestamp occurred_at = 14;
+
+  // Hash of (event_id + agent_id + occurred_at + payload) for tamper detection
+  bytes integrity_hash = 15;
+}
+
+// A detected threat or anomaly signal from the detection engine.
+message ThreatSignal {
+  string         signal_id    = 1;  // UUID v4
+  string         agent_id     = 2;
+  string         tenant_id    = 3;
+  ThreatType     threat_type  = 4;
+  ThreatSeverity severity     = 5;
+
+  // 0.0 = uncertain, 1.0 = certain
+  float confidence = 6;
+
+  string description = 7;
+
+  // The audit event that triggered this signal
+  string related_event_id = 8;
+
+  // Raw evidence: prompt snippet, tool call args, behavior vectors etc.
+  google.protobuf.Struct evidence = 9;
+
+  // Recommended action for the runtime gateway to take
+  Decision recommended_action = 10;
+
+  // If true, the detection engine has already auto-actioned this
+  bool auto_actioned = 11;
+  string auto_action_taken = 12;  // e.g. "agent_suspended", "tool_blocked"
+
+  google.protobuf.Timestamp detected_at = 13;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// POLICY MESSAGES
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// The result of evaluating an OPA policy against an agent action.
+message PolicyDecision {
+  string   request_id = 1;  // correlates to the originating request
+  string   agent_id   = 2;
+  string   policy_id  = 3;  // which OPA policy bundle was evaluated
+  Decision decision   = 4;
+  string   reason     = 5;  // human-readable explanation
+
+  // Which specific rules were violated, if denied
+  repeated string violated_rules = 6;
+
+  // How long the policy evaluation took — used to detect performance regression
+  google.protobuf.Duration evaluation_duration = 7;
+
+  google.protobuf.Timestamp evaluated_at = 8;
+}
+
+// A sandbox execution context — defines the constraints on a sandboxed run.
+message SandboxSpec {
+  string sandbox_id  = 1;
+  string agent_id    = 2;
+
+  // Resource caps
+  uint64 memory_limit_bytes   = 3;
+  uint32 cpu_milli_cores       = 4;  // 1000 = 1 vCPU
+  google.protobuf.Duration timeout = 5;
+
+  // Network policy
+  bool   network_egress_allowed      = 6;
+  repeated string allowed_egress_hosts = 7;  // if egress allowed, allowlist
+
+  // Filesystem policy
+  bool   readonly_filesystem   = 8;
+  repeated string allowed_paths = 9;  // writable paths if not fully readonly
+
+  // The actual workload
+  string runtime = 10;  // "python3", "node", "bash"
+  bytes  payload = 11;  // the code or command to execute
+
+  google.protobuf.Timestamp created_at = 12;
+}
+
+// The result of a sandbox execution.
+message SandboxResult {
+  string sandbox_id    = 1;
+  string agent_id      = 2;
+  bool   success       = 3;
+  int32  exit_code     = 4;
+  bytes  stdout        = 5;
+  bytes  stderr        = 6;
+
+  // Resource usage during execution
+  uint64 peak_memory_bytes = 7;
+  google.protobuf.Duration wall_time = 8;
+
+  // If terminated due to violation
+  string termination_reason = 9;
+
+  google.protobuf.Timestamp started_at   = 10;
+  google.protobuf.Timestamp completed_at = 11;
+}
+
+
+// ═══════════════════════════════════════════════════════════════════════════════
+// SERVICE RPC DEFINITIONS
+// ═══════════════════════════════════════════════════════════════════════════════
+
+// ─── Agent Auth Service ────────────────────────────────────────────────────────
+// Implemented by: apps/auth-service
+// Called by: all other services for token issuance and validation
+
+message RegisterAgentRequest {
+  string      agent_name  = 1;
+  AgentType   agent_type  = 2;
+  string      tenant_id   = 3;
+  string      team_id     = 4;
+  repeated string requested_scopes   = 5;
+  repeated string allowed_ip_cidrs   = 6;
+  map<string, string> labels         = 7;
+  google.protobuf.Duration token_ttl = 8;  // requested TTL, subject to policy cap
+}
+
+message RegisterAgentResponse {
+  string        agent_id = 1;
+  string        token    = 2;  // signed JWT
+  AgentIdentity identity = 3;
+}
+
+message IssueTokenRequest {
+  string agent_id = 1;
+  string secret   = 2;  // agent's shared secret or client certificate hash
+  google.protobuf.Duration requested_ttl = 3;
+}
+
+message IssueTokenResponse {
+  string        token        = 1;
+  string        token_id     = 2;  // jti claim, for revocation
+  AgentIdentity identity     = 3;
+  google.protobuf.Timestamp expires_at = 4;
+}
+
+message ValidateTokenRequest {
+  string token    = 1;
+  string scope    = 2;  // optional: assert this specific scope is present
+  string resource = 3;  // optional: the resource being accessed (for audit)
+}
+
+message ValidateTokenResponse {
+  bool          valid    = 1;
+  AgentIdentity identity = 2;  // populated when valid = true
+  string        reason   = 3;  // populated when valid = false
+  bool          revoked  = 4;  // true if explicitly revoked (vs expired)
+}
+
+message RevokeTokenRequest {
+  string agent_id   = 1;
+  string token_id   = 2;  // specific token, or empty to revoke all for this agent
+  string reason     = 3;
+  string revoked_by = 4;
+}
+
+message RevokeTokenResponse {
+  bool   success       = 1;
+  uint32 tokens_revoked = 2;  // could be multiple if no token_id specified
+}
+
+message SuspendAgentRequest {
+  string agent_id    = 1;
+  string reason      = 2;
+  string suspended_by = 3;
+  bool   revoke_tokens = 4;  // also revoke all active tokens immediately
+}
+
+message SuspendAgentResponse {
+  bool   success = 1;
+  string agent_id = 2;
+  AgentStatus new_status = 3;
+}
+
+message ReinstateAgentRequest {
+  string agent_id     = 1;
+  string reinstated_by = 2;
+  string reason       = 3;
+}
+
+message ReinstateAgentResponse {
+  bool          success  = 1;
+  AgentIdentity identity = 2;
+}
+
+message GetAgentRequest {
+  string agent_id = 1;
+}
+
+message GetAgentResponse {
+  AgentIdentity identity         = 1;
+  repeated TokenSummary tokens   = 2;
+  repeated Role roles            = 3;
+}
+
+message ListAgentsRequest {
+  string      tenant_id   = 1;
+  string      team_id     = 2;  // optional filter
+  AgentStatus status      = 3;  // optional filter
+  AgentType   agent_type  = 4;  // optional filter
+  uint32      page_size   = 5;
+  string      page_token  = 6;
+}
+
+message ListAgentsResponse {
+  repeated AgentIdentity agents    = 1;
+  string                 next_page_token = 2;
+  uint32                 total_count     = 3;
+}
+
+service AgentAuthService {
+  // Registration — called once when a new agent joins the system
+  rpc RegisterAgent (RegisterAgentRequest) returns (RegisterAgentResponse);
+
+  // Token lifecycle
+  rpc IssueToken    (IssueTokenRequest)    returns (IssueTokenResponse);
+  rpc ValidateToken (ValidateTokenRequest) returns (ValidateTokenResponse);
+  rpc RevokeToken   (RevokeTokenRequest)   returns (RevokeTokenResponse);
+
+  // Agent lifecycle
+  rpc SuspendAgent   (SuspendAgentRequest)   returns (SuspendAgentResponse);
+  rpc ReinstateAgent (ReinstateAgentRequest) returns (ReinstateAgentResponse);
+  rpc GetAgent       (GetAgentRequest)       returns (GetAgentResponse);
+  rpc ListAgents     (ListAgentsRequest)     returns (ListAgentsResponse);
+}
+
+
+// ─── Audit Service ─────────────────────────────────────────────────────────────
+// Implemented by: apps/telemetry-service
+// Called by: every other service to record events
+
+message WriteAuditEventRequest {
+  AuditEvent event = 1;
+}
+
+message WriteAuditEventResponse {
+  bool   success  = 1;
+  string event_id = 2;
+}
+
+message WriteThreatSignalRequest {
+  ThreatSignal signal = 1;
+}
+
+message WriteThreatSignalResponse {
+  bool   success   = 1;
+  string signal_id = 2;
+}
+
+message QueryAuditEventsRequest {
+  string    tenant_id   = 1;
+  string    agent_id    = 2;  // optional filter
+  EventType event_type  = 3;  // optional filter
+  string    trace_id    = 4;  // optional: get all events for a trace
+  google.protobuf.Timestamp from = 5;
+  google.protobuf.Timestamp to   = 6;
+  uint32 page_size   = 7;
+  string page_token  = 8;
+}
+
+message QueryAuditEventsResponse {
+  repeated AuditEvent events         = 1;
+  string              next_page_token = 2;
+  uint32              total_count     = 3;
+}
+
+service AuditService {
+  rpc WriteAuditEvent   (WriteAuditEventRequest)   returns (WriteAuditEventResponse);
+  rpc WriteThreatSignal (WriteThreatSignalRequest) returns (WriteThreatSignalResponse);
+  rpc QueryAuditEvents  (QueryAuditEventsRequest)  returns (QueryAuditEventsResponse);
+}
